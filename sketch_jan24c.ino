@@ -8,7 +8,7 @@
 
 String pad6(uint32_t num) {
   String s = String(num);
-  while (s.length() < 6) s = "0" + s;
+  while (s.length() < 8) s = "0" + s;
   return s;
 }
 
@@ -77,6 +77,7 @@ uint32_t generateTOTP(const uint8_t* secret, size_t len, uint64_t unixTime) {
   uint64_t counter = unixTime / 30;
   Key key(const_cast<uint8_t*>(secret), len);
   SimpleHOTP hotp(key, counter);
+  hotp.setDigits(8);
   return hotp.generateHOTP();
 }
 
