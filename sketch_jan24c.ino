@@ -249,7 +249,7 @@ bool verifyTOTPFromString(String input) {
         Serial.print(F("✅ СОВПАДЕНИЕ! Ключ найден в ячейке #"));
         Serial.println(i);
         digitalWrite(YELLOW_PIN, HIGH);
-        delay(1000);
+        delay(10000);
         digitalWrite(YELLOW_PIN, LOW);
         return true;  // Ключ найден
       }
