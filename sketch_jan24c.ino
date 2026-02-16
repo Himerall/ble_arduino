@@ -2,7 +2,8 @@
 #include "Key.h"             // Подключение пользовательской библиотеки для работы с криптографическими ключами
 #include "SimpleHOTP.h"      // Подключение библиотеки для генерации HOTP/TOTP кодов
 #include <SoftwareSerial.h> // Подключение библиотеки для программного создания последовательного портa
-#include <CustomJWT.h>
+// #include <CustomJWT.h>
+#include "qrcode.h"
 
 // === ПИНЫ ===
 #define BT_RX_PIN      2     // Определение пина 2 как приёмника (RX) для связи с модулем HC-05 (Arduino RX → HC-05 TX)
@@ -18,6 +19,7 @@ SoftwareSerial btSerial(BT_RX_PIN, BT_TX_PIN);  // Создание програ
 #define MAX_RECORDS  51      // Максимальное количество записей ключей в EEPROM (51 запись × 20 байт = 1020 байт)
 #define FIXED_TIME   1769272850ULL  // Фиксированное временное значение для генерации тестовых UID (Unix timestamp)
 #define JWT_KEY      "QHYD4M44ZZYHYD7AH7777774B6APQ7HG"
+#define BASE_32      "YBEZELDNIYDHBJSVKW22UVUN75RZMNRJ"
 
 // Правильный ключ из Base32: YBEZELDNIYDHBJSVKW22UVUN75RZMNRJ
 const uint8_t FIXED_KEY_BYTES[SECRET_SIZE] PROGMEM = {  // Хранение секретного ключа в программной памяти (экономия RAM)
@@ -26,7 +28,9 @@ const uint8_t FIXED_KEY_BYTES[SECRET_SIZE] PROGMEM = {  // Хранение се
   54, 108, 217, 179                       // Всего 20 байт
 };
 
-CustomJWT jwt(JWT_KEY, 256);
+
+
+// CustomJWT jwt(JWT_KEY, 256);
 
 // === ПЕЧАТЬ С ВЕДУЩИМИ НУЛЯМИ ===
 void printPadded(uint32_t num, uint8_t digits) {  // Функция для вывода числа с ведущими нулями (для красивого форматирования кодов)
@@ -85,7 +89,7 @@ void resetBluetoothModule() {                     // Функция полног
   digitalWrite(YELLOW_PIN, HIGH);
   // Перезапуск соединения
   btSerial.end();                                 // Прекращение текущего программного последовательного соединения
-  btSerial.begin(9600);                           // Перезапуск соединения на скорости 9600 бод
+  btSerial.begin(38400);                           // Перезапуск соединения на скорости 9600 бод
   delay(300);                                     // Короткая задержка для стабилизации соединения
   digitalWrite(YELLOW_PIN, LOW);
   Serial.println(F("✅ Модуль перезагружен. Требуется новое подключение.\n"));  // Подтверждение успешного сброса
@@ -162,6 +166,103 @@ void configureHC05() {                            // Функция настро
 }
 
 // === ОСТАЛЬНЫЕ ФУНКЦИИ ===
+void generateQR(const char* text) {
+  QRCode qrcode;
+  uint8_t qrcodeData[qrcode_getBufferSize(4)]; 
+  
+  // Генерация QR-кода (L — низкая ошибка коррекции)
+  qrcode_initText(&qrcode, qrcodeData, 4, 0, text);
+  
+  // Вывод в ASCII (21x21 модуль для версии 3)
+  // Рамка сверху
+  Serial.print("┌");
+  for (uint8_t i = 0; i < qrcode.size * 2; i++) Serial.print("─");
+  Serial.println("┐");
+  
+  // Тело QR (инверсия: █ = белый, пробел = чёрный)
+  for (uint8_t y = 0; y < qrcode.size; y++) {
+    Serial.print("│");
+    for (uint8_t x = 0; x < qrcode.size; x++) {
+      bool pixel = qrcode_getModule(&qrcode, x, y);
+      Serial.print(pixel ? "██" : "  ");  // █ = чёрный (сканируется!)  // Инверсия для сканеров
+    }
+    Serial.println("│");
+  }
+  
+  // Рамка снизу
+  Serial.print("└");
+  for (uint8_t i = 0; i < qrcode.size * 2; i++) Serial.print("─");
+  Serial.println("┘");
+}
+
+bool verifyTOTPFromString(String input) {
+  // Проверка длины строки (8 цифр TOTP + 10 цифр времени = 18)
+  if (input.length() < 18) {
+    Serial.println(F("❌ Ошибка: строка слишком короткая"));
+    digitalWrite(RED_PIN, HIGH);
+    delay(1000);
+    digitalWrite(RED_PIN, LOW);
+    return false;
+  }
+
+  // 1. Извлекаем TOTP (первые 8 символов)
+  String totpStr = input.substring(0, 8);
+  uint32_t targetTOTP = totpStr.toInt();
+
+  // 2. Извлекаем время (символы с 8 по 17)
+  String timeStr = input.substring(8, 18);
+  unsigned long unixTime = timeStr.toInt();
+
+  // Проверка корректности времени
+  if (unixTime < 1000000000UL) {
+    Serial.println(F("❌ Ошибка: некорректное время"));
+    digitalWrite(RED_PIN, HIGH);
+    delay(1000);
+    digitalWrite(RED_PIN, LOW);
+    return false;
+  }
+
+  Serial.print(F("🔍 Проверка TOTP: "));
+  Serial.print(totpStr);
+  Serial.print(F(" | Время: "));
+  Serial.println(timeStr);
+
+  // 3. Перебор всех ключей в EEPROM
+  for (int i = 0; i < MAX_RECORDS; i++) {
+    if (!isSlotFree(i)) {  // Если ячейка занята
+      uint8_t secret[SECRET_SIZE];
+      
+      // Чтение ключа из EEPROM
+      for (int j = 0; j < SECRET_SIZE; j++) {
+        secret[j] = EEPROM.read(i * SECRET_SIZE + j);
+      }
+
+      // Генерация TOTP для этого ключа с извлечённым временем
+      uint32_t generatedTOTP = generateTOTP8(secret, SECRET_SIZE, unixTime);
+
+      // Сравнение
+      Serial.print(F("  🔄 Ячейка #"));
+      Serial.print(i);
+      Serial.print(F(" → "));
+      Serial.println(generatedTOTP);
+      if (generatedTOTP == targetTOTP) {
+        Serial.print(F("✅ СОВПАДЕНИЕ! Ключ найден в ячейке #"));
+        Serial.println(i);
+        digitalWrite(YELLOW_PIN, HIGH);
+        delay(1000);
+        digitalWrite(YELLOW_PIN, LOW);
+        return true;  // Ключ найден
+      }
+    }
+  }
+
+  Serial.println(F("❌ Ключ не найден"));
+  digitalWrite(RED_PIN, HIGH);
+  delay(1000);
+  digitalWrite(RED_PIN, LOW);
+  return false;  // Ни один ключ не подошёл
+}
+
 uint8_t pseudoRandomByte() {                      // Генерация псевдослучайного байта на основе шума АЦП
   uint8_t val = 0;                                // Инициализация результата нулём
   for (int i = 0; i < 8; i++) {                   // Цикл для формирования 8 бит
@@ -195,6 +296,30 @@ void base32Encode(const uint8_t* data, size_t len) {  // Кодирование 
     Serial.write('=');                            // Вывод символа заполнения
     chars++;
   }
+}
+
+// === НОВАЯ ФУНКЦИЯ: Возвращает Base32 как String ===
+String getBase32String(const uint8_t* data, size_t len) {
+  String result = "";
+  int bits = 0, value = 0, chars = 0;
+  for (size_t i = 0; i < len; i++) {
+    value = (value << 8) | data[i];
+    bits += 8;
+    while (bits >= 5) {
+      bits -= 5;
+      result += (char)pgm_read_byte(&base32Alphabet[(value >> bits) & 0x1F]);  // ← Добавлено (char)
+      chars++;
+    }
+  }
+  if (bits > 0) {
+    result += (char)pgm_read_byte(&base32Alphabet[(value << (5 - bits)) & 0x1F]);  // ← Добавлено (char)
+    chars++;
+  }
+  while (chars % 8 != 0) {
+    result += '=';
+    chars++;
+  }
+  return result;
 }
 
 bool isSlotFree(int index) {                      // Проверка, свободна ли ячейка в EEPROM по указанному индексу
@@ -256,6 +381,7 @@ void listAndDeleteUIDs() {                        // Функция просмо
   Serial.println(F(") или all для полной очистки. Для выхода используйте 0:"));
   while (!Serial.available()) delay(10);          // Ожидание ввода пользователя
   String input = Serial.readStringUntil('\n');    // Чтение введённой строки
+  input.trim();
   int choice = input.toInt(); 
   if (choice >= 1 && choice <= count) {           // Если выбрана корректная запись для удаления
     delete_uid(choice);
@@ -289,7 +415,7 @@ void setup() {
   digitalWrite(YELLOW_PIN, LOW); 
   digitalWrite(RED_PIN, HIGH);
   Serial.begin(9600);                             // Инициализация аппаратного последовательного порта для отладки
-  jwt.allocateJWTMemory();
+  // jwt.allocateJWTMemory();
   while (!Serial) delay(10);                      // Ожидание подключения монитора порта (для плат с USB-конвертером)
   Serial.setTimeout(1800000);
   digitalWrite(YELLOW_PIN, HIGH);
@@ -337,6 +463,15 @@ void loop() {
         Serial.print(F("🔑 Base32: "));            // Вывод ключа в формате Base32 для ручного ввода в приложение
         base32Encode(newSecret, SECRET_SIZE);
         Serial.println();
+        uint8_t fixedKeyRam[SECRET_SIZE];           // Буфер для копирования ключа из PROGMEM в RAM
+        memcpy_P(fixedKeyRam, FIXED_KEY_BYTES, SECRET_SIZE);  // Копирование ключа из флеш-памяти в оперативную
+        uint32_t fullCode = generateTOTP8(fixedKeyRam, SECRET_SIZE, FIXED_TIME);  // Генерация 8-значного кода на основе фиксированного времени
+        if (fullCode == 0 || fullCode == 4294967295UL) fullCode = 3627;  // Обработка ошибочных значений кода
+        uint32_t pin4 = fullCode % 10000;
+        String qrData = String(pin4) + getBase32String(newSecret, SECRET_SIZE);
+        Serial.print(F("📱 QR строка: "));
+        Serial.println(qrData);  // Проверка перед генерацией
+        generateQR(qrData.c_str());
         processed = true;                         // Пометка команды как обработанной
       }
 
@@ -405,6 +540,9 @@ void loop() {
     btSerial.print(F("\n✅ Получено: "));             // Подтверждение приёма сообщения обратно на устройство
     btSerial.println(msg);
     
+    verifyTOTPFromString(msg);
+
+
     // СБРОС ПОСЛЕ ПОЛУЧЕНИЯ СООБЩЕНИЯ ОТ ТЕЛЕФОНА (временно отключён)
     delay(300);
     // btSerial.end();
