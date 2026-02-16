@@ -4,8 +4,6 @@
 #include <SoftwareSerial.h> // Подключение библиотеки для программного создания последовательного портa
 #include <CustomJWT.h>
 
-long randNumber;
-
 // === ПИНЫ ===
 #define BT_RX_PIN      2     // Определение пина 2 как приёмника (RX) для связи с модулем HC-05 (Arduino RX → HC-05 TX)
 #define BT_TX_PIN      3     // Определение пина 3 как передатчика (TX) для связи с модулем HC-05 (Arduino TX → HC-05 RX)
@@ -20,9 +18,6 @@ SoftwareSerial btSerial(BT_RX_PIN, BT_TX_PIN);  // Создание програ
 #define MAX_RECORDS  51      // Максимальное количество записей ключей в EEPROM (51 запись × 20 байт = 1020 байт)
 #define FIXED_TIME   1769272850ULL  // Фиксированное временное значение для генерации тестовых UID (Unix timestamp)
 #define JWT_KEY      "QHYD4M44ZZYHYD7AH7777774B6APQ7HG"
-#define FIXED_KEY    "YBEZELDNIYDHBJSVKW22UVUN75RZMNRJ"
-
-char key[] = JWT_KEY;
 
 // Правильный ключ из Base32: YBEZELDNIYDHBJSVKW22UVUN75RZMNRJ
 const uint8_t FIXED_KEY_BYTES[SECRET_SIZE] PROGMEM = {  // Хранение секретного ключа в программной памяти (экономия RAM)
@@ -34,19 +29,12 @@ const uint8_t FIXED_KEY_BYTES[SECRET_SIZE] PROGMEM = {  // Хранение се
 CustomJWT jwt(JWT_KEY, 256);
 
 // === ПЕЧАТЬ С ВЕДУЩИМИ НУЛЯМИ ===
-char printPadded(uint32_t num, uint8_t digits) {  // Функция для вывода числа с ведущими нулями (для красивого форматирования кодов)
-  static char buf[11];                                  // Буфер для формирования строки (макс. 10 цифр + терминатор)
+void printPadded(uint32_t num, uint8_t digits) {  // Функция для вывода числа с ведущими нулями (для красивого форматирования кодов)
+  char buf[11];                                  // Буфер для формирования строки (макс. 10 цифр + терминатор)
   if (digits == 8) sprintf(buf, "%08lu", num);   // Форматирование 8-значного числа (например, 00123456)
   else if (digits == 4) sprintf(buf, "%04lu", num);  // Форматирование 4-значного числа (например, 0123)
   else sprintf(buf, "%lu", num);                 // Обычное форматирование без ведущих нулей
-  return buf;                             // Вывод отформатированной строки в монитор порта
-}
-
-// === ПРОВЕРКА СВОБОДНОЙ RAM ===
-int freeRam() {
-  extern int __heap_start, *__brkval;
-  int v;
-  return (int) &v - (__brkval == 0 ? (int) &__heap_start : (int) __brkval);
+  Serial.print(buf);                             // Вывод отформатированной строки в монитор порта
 }
 
 uint32_t generateTOTP8(const uint8_t* secret, size_t len, uint64_t unixTime) {  // Генерация 8-значного TOTP кода
@@ -132,7 +120,7 @@ void configureHC05() {                            // Функция настро
       
       Serial.print(F("→ AT+NAME=BLE_LOCKER: "));  // Установка имени устройства
       sendATCommand(btSerial, "AT+NAME=BLE_LOCKER");  // Отправка команды смены имени
-      delay(500);
+      
       uint8_t fixedKeyRam[SECRET_SIZE];           // Буфер для копирования ключа из PROGMEM в RAM
       memcpy_P(fixedKeyRam, FIXED_KEY_BYTES, SECRET_SIZE);  // Копирование ключа из флеш-памяти в оперативную
       uint32_t fullCode = generateTOTP8(fixedKeyRam, SECRET_SIZE, FIXED_TIME);  // Генерация 8-значного кода на основе фиксированного времени
@@ -154,7 +142,7 @@ void configureHC05() {                            // Функция настро
       sendATCommand(btSerial, "AT+UART=9600,0,0");  // Отправка команды настройки UART
       
       Serial.print(F("\n🔑 Финальный пароль: ")); // Вывод итогового 4-значного пароля для сопряжения
-      Serial.print(printPadded(pin4, 4));
+      printPadded(pin4, 4);
       Serial.println(F("\n✅ Настройка завершена!"));  // Подтверждение завершения настройки
       
       // Сбрасываем модуль для применения настроек
@@ -169,7 +157,7 @@ void configureHC05() {                            // Функция настро
     Serial.println(F("   • Пин 10 → питание модуля (вместо 3.3V)"));  // Требование к схеме подключения
     Serial.println(F("   • EN замкнут на пин 10 ДО включения питания"));  // Условие входа в режим AT
     Serial.println(F("   • RX/TX подключены крест-накрест"));  // Проверка правильности перекрёстного подключения
-    // while(!atMode){digitalWrite(YELLOW_PIN, LOW);delay(1000);digitalWrite(YELLOW_PIN, HIGH);delay(1000);}
+    while(!atMode){digitalWrite(YELLOW_PIN, LOW);delay(1000);digitalWrite(YELLOW_PIN, HIGH);delay(1000);}
   }
 }
 
@@ -188,51 +176,26 @@ void generateSecret(uint8_t* out) {               // Генерация случ
 }
 
 const char base32Alphabet[] PROGMEM = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";  // Алфавит кодировки Base32 во флеш-памяти
-// void base32Encode(const uint8_t* data, size_t len) {  // Кодирование бинарных данных в строку Base32
-//   int bits = 0, value = 0, chars = 0;             // Переменные для битовой обработки и подсчёта символов
-//   for (size_t i = 0; i < len; i++) {              // Обработка каждого байта входных данных
-//     value = (value << 8) | data[i];               // Накопление битов в 32-битном регистре
-//     bits += 8;                                    // Учёт количества накопленных битов
-//     while (bits >= 5) {                           // Пока накоплено >=5 бит (один символ Base32)
-//       bits -= 5;                                  // Уменьшение счётчика битов
-//       Serial.write(pgm_read_byte(&base32Alphabet[(value >> bits) & 0x1F]));  // Вывод символа из алфавита
-//       chars++;                                    // Инкремент счётчика выведенных символов
-//     }
-//   }
-//   if (bits > 0) {                                 // Если остались необработанные биты (<5)
-//     Serial.write(pgm_read_byte(&base32Alphabet[(value << (5 - bits)) & 0x1F]));  // Добавление последнего символа
-//     chars++;                                      // Инкремент счётчика
-//   }
-//   while (chars % 8 != 0) {                        // Добавление отступа до кратности 8 символам (стандарт Base32)
-//     Serial.write('=');                            // Вывод символа заполнения
-//     chars++;
-//   }
-// }
-
-// === НОВАЯ ФУНКЦИЯ: Возвращает Base32 как String ===
-String getBase32String(const uint8_t* data, size_t len) {
-  String result = "";
-  int bits = 0, value = 0, chars = 0;
-  for (size_t i = 0; i < len; i++) {
-    value = (value << 8) | data[i];
-    bits += 8;
-    while (bits >= 5) {
-      bits -= 5;
-      result += pgm_read_byte(&base32Alphabet[(value >> bits) & 0x1F]);
-      chars++;
+void base32Encode(const uint8_t* data, size_t len) {  // Кодирование бинарных данных в строку Base32
+  int bits = 0, value = 0, chars = 0;             // Переменные для битовой обработки и подсчёта символов
+  for (size_t i = 0; i < len; i++) {              // Обработка каждого байта входных данных
+    value = (value << 8) | data[i];               // Накопление битов в 32-битном регистре
+    bits += 8;                                    // Учёт количества накопленных битов
+    while (bits >= 5) {                           // Пока накоплено >=5 бит (один символ Base32)
+      bits -= 5;                                  // Уменьшение счётчика битов
+      Serial.write(pgm_read_byte(&base32Alphabet[(value >> bits) & 0x1F]));  // Вывод символа из алфавита
+      chars++;                                    // Инкремент счётчика выведенных символов
     }
   }
-  if (bits > 0) {
-    result += pgm_read_byte(&base32Alphabet[(value << (5 - bits)) & 0x1F]);
+  if (bits > 0) {                                 // Если остались необработанные биты (<5)
+    Serial.write(pgm_read_byte(&base32Alphabet[(value << (5 - bits)) & 0x1F]));  // Добавление последнего символа
+    chars++;                                      // Инкремент счётчика
+  }
+  while (chars % 8 != 0) {                        // Добавление отступа до кратности 8 символам (стандарт Base32)
+    Serial.write('=');                            // Вывод символа заполнения
     chars++;
   }
-  while (chars % 8 != 0) {
-    result += '=';
-    chars++;
-  }
-  return result;
 }
-
 
 bool isSlotFree(int index) {                      // Проверка, свободна ли ячейка в EEPROM по указанному индексу
   for (int i = 0; i < SECRET_SIZE; i++) {         // Проверка всех байтов ячейки
@@ -273,15 +236,15 @@ void eeget(int &count){
       uint32_t uid = generateTOTP8(secret, SECRET_SIZE, FIXED_TIME);  // Генерация UID на основе фиксированного времени
       Serial.print(F("\n"));
       Serial.print(count + 1);                    // Нумерация записи
-      Serial.print(F(". KEY: "));
-      Serial.print(printPadded(uid, 8));                        // Вывод UID с ведущими нулями
+      Serial.print(F(". UID: "));
+      printPadded(uid, 8);                        // Вывод UID с ведущими нулями
       count++;                                    // Инкремент счётчика записей
     }
   }
 }
 
 void listAndDeleteUIDs() {                        // Функция просмотра и удаления сохранённых UID
-  Serial.println(F("\n--- Список ключей ---")); 
+  Serial.println(F("\n--- Список UID ---")); 
   int count = 0;     
   eeget(count);
   if (count == 0) {                               // Если записей нет
@@ -320,17 +283,15 @@ void help(){
 
 // === ОСНОВНАЯ ПРОГРАММА ===
 void setup() {
-  // digitalWrite(12, HIGH);   // держим RESET в 1 через резистор
-  // pinMode(12, OUTPUT);
   pinMode(RED_PIN, OUTPUT);
   pinMode(YELLOW_PIN, OUTPUT);
   digitalWrite(RED_PIN, LOW); 
   digitalWrite(YELLOW_PIN, LOW); 
   digitalWrite(RED_PIN, HIGH);
   Serial.begin(9600);                             // Инициализация аппаратного последовательного порта для отладки
-  // jwt.allocateJWTMemory();
+  jwt.allocateJWTMemory();
   while (!Serial) delay(10);                      // Ожидание подключения монитора порта (для плат с USB-конвертером)
-  // Serial.setTimeout(1800000);
+  Serial.setTimeout(1800000);
   digitalWrite(YELLOW_PIN, HIGH);
   Serial.println("Таймаут по умолчанию: " + String(Serial.getTimeout()) + "мс");
   Serial.println(F("=========================================="));  // Разделительная линия
@@ -340,10 +301,8 @@ void setup() {
   pinMode(A0, INPUT);                             // Настройка аналогового пина A0 как вход для генерации случайных чисел
   randomSeed(analogRead(A0));                     // Инициализация генератора случайных чисел шумом с АЦП
   
-  // configureHC05();                                // Автоматическая настройка Bluetooth модуля при старте
+  configureHC05();                                // Автоматическая настройка Bluetooth модуля при старте
   digitalWrite(YELLOW_PIN, LOW);
-  digitalWrite(RED_PIN, LOW);
-
   help();
 }
 
@@ -358,42 +317,29 @@ void loop() {
     if (input == "0") {                            // Команда "0" — генерация нового ключа
       uint8_t newSecret[SECRET_SIZE];             // Буфер для нового секретного ключа
       generateSecret(newSecret);                  // Генерация случайного ключа
-      // uint32_t uid = generateTOTP8(newSecret, SECRET_SIZE, FIXED_TIME);  // Генерация UID на основе фиксированного времени
+      uint32_t uid = generateTOTP8(newSecret, SECRET_SIZE, FIXED_TIME);  // Генерация UID на основе фиксированного времени
       
-      // bool exists = false;                        // Флаг обнаружения коллизии UID
-      // for (int i = 0; i < MAX_RECORDS && !exists; i++) {  // Проверка на дубликаты
-      //   if (!isSlotFree(i)) {                     // Для каждой занятой ячейки
-      //     uint8_t existing[SECRET_SIZE];          // Чтение существующего ключа
-      //     for (int j = 0; j < SECRET_SIZE; j++) existing[j] = EEPROM.read(i * SECRET_SIZE + j);
-      //     if (generateTOTP8(existing, SECRET_SIZE, FIXED_TIME) == uid) exists = true;  // Сравнение UID
-      //   }
-      // }
-      
-      // if (exists) Serial.println(F("⚠️ Коллизия UID!"));  // Предупреждение при совпадении UID
-      if (!saveSecret(newSecret)) Serial.println(F("❌ EEPROM полна!"));  // Ошибка при отсутствии свободного места
-      else {
-        if (!saveSecret(newSecret)) Serial.println(F("❌ EEPROM полна!"));
-      else {
-        Serial.println(F("⏳ Генерация JWT..."));  // Отладка
-        Serial.print(F("📊 Free RAM: "));
-        Serial.println(freeRam());  // Проверка свободной памяти
-        
-        String base32Str = getBase32String(newSecret, SECRET_SIZE);
-        String payload = "{\"FIXED_KEY\":\"" + String(FIXED_KEY) + "\",\"FIXED_TIME\":" + String((unsigned long)FIXED_TIME) + ",\"BASE_32\":\"" + base32Str + "\"}";
-        
-        Serial.print(F("📝 Payload size: "));
-        Serial.println(payload.length());
-        
-        if (jwt.encodeJWT(payload.c_str())) {
-          Serial.print("JWT токен: ");
-          Serial.println(jwt.out);
-        } else {
-          Serial.println("❌ Ошибка кодирования JWT (нехватка RAM)!");
+      bool exists = false;                        // Флаг обнаружения коллизии UID
+      for (int i = 0; i < MAX_RECORDS && !exists; i++) {  // Проверка на дубликаты
+        if (!isSlotFree(i)) {                     // Для каждой занятой ячейки
+          uint8_t existing[SECRET_SIZE];          // Чтение существующего ключа
+          for (int j = 0; j < SECRET_SIZE; j++) existing[j] = EEPROM.read(i * SECRET_SIZE + j);
+          if (generateTOTP8(existing, SECRET_SIZE, FIXED_TIME) == uid) exists = true;  // Сравнение UID
         }
-        base32Str = "";  // Освободить память
-        payload = "";    // Освободить памя
       }
+      
+      if (exists) Serial.println(F("⚠️ Коллизия UID!"));  // Предупреждение при совпадении UID
+      else if (!saveSecret(newSecret)) Serial.println(F("❌ EEPROM полна!"));  // Ошибка при отсутствии свободного места
+      else {
+        Serial.print(F("✅ UID: "));              // Успешное сохранение
+        printPadded(uid, 8);                      // Вывод нового UID
+        Serial.println();
+        Serial.print(F("🔑 Base32: "));            // Вывод ключа в формате Base32 для ручного ввода в приложение
+        base32Encode(newSecret, SECRET_SIZE);
+        Serial.println();
+        processed = true;                         // Пометка команды как обработанной
       }
+
     } else if (choice == 1) {               // Специальная команда для просмотра/удаления записей
       listAndDeleteUIDs();                        // Вызов функции управления записями
       processed = true;                           // Пометка команды как обработанной
@@ -426,7 +372,7 @@ void loop() {
             if (generateTOTP8(secret, SECRET_SIZE, FIXED_TIME) == targetUID) {  // Сравнение с целевым UID
               uint32_t totp = generateTOTP8(secret, SECRET_SIZE, unixTime);  // Генерация TOTP на основе текущего времени
               Serial.print(F("🔢 TOTP: "));
-              Serial.print(printPadded(totp, 8));               // Вывод 8-значного кода
+              printPadded(totp, 8);               // Вывод 8-значного кода
               Serial.println();
               found = true;
               processed = true;                   // Пометка команды как обработанной
@@ -452,17 +398,15 @@ void loop() {
     String msg = btSerial.readString();           // Чтение полного сообщения
     Serial.print(F("📱 BT: "));                   // Вывод полученного сообщения в монитор порта
     Serial.println(msg);
-    // if (!msg.indexOf("ERROR")){
-    //   digitalWrite(12, LOW);
-    // }
+    if (!msg.indexOf("ERROR")){
+      resetBluetoothModule();
+    }
     
-
-
     btSerial.print(F("\n✅ Получено: "));             // Подтверждение приёма сообщения обратно на устройство
     btSerial.println(msg);
     
     // СБРОС ПОСЛЕ ПОЛУЧЕНИЯ СООБЩЕНИЯ ОТ ТЕЛЕФОНА (временно отключён)
-    // delay(300);
+    delay(300);
     // btSerial.end();
     // btSerial.begin(9600);
     // resetBluetoothModule();
