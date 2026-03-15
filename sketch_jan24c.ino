@@ -11,6 +11,7 @@
 #define BT_POWER_PIN  10     // Определение пина 10 для управления питанием модуля HC-05 (вместо прямого подключения к 3.3V)
 #define RED_PIN        9
 #define YELLOW_PIN     8
+#define LOCKER_PIN    12
 
 SoftwareSerial btSerial(BT_RX_PIN, BT_TX_PIN);  // Создание программного последовательного порта для общения с Bluetooth модулем
 
@@ -248,9 +249,11 @@ bool verifyTOTPFromString(String input) {
       if (generatedTOTP == targetTOTP) {
         Serial.print(F("✅ СОВПАДЕНИЕ! Ключ найден в ячейке #"));
         Serial.println(i);
+        digitalWrite(LOCKER_PIN, LOW);
         digitalWrite(YELLOW_PIN, HIGH);
         delay(10000);
         digitalWrite(YELLOW_PIN, LOW);
+        digitalWrite(LOCKER_PIN, HIGH);
         return true;  // Ключ найден
       }
     }
@@ -410,10 +413,12 @@ void help(){
 // === ОСНОВНАЯ ПРОГРАММА ===
 void setup() {
   pinMode(RED_PIN, OUTPUT);
+  pinMode(LOCKER_PIN, OUTPUT);
   pinMode(YELLOW_PIN, OUTPUT);
   digitalWrite(RED_PIN, LOW); 
   digitalWrite(YELLOW_PIN, LOW); 
   digitalWrite(RED_PIN, HIGH);
+  digitalWrite(LOCKER_PIN, HIGH);
   Serial.begin(9600);                             // Инициализация аппаратного последовательного порта для отладки
   // jwt.allocateJWTMemory();
   while (!Serial) delay(10);                      // Ожидание подключения монитора порта (для плат с USB-конвертером)
