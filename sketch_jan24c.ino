@@ -405,8 +405,9 @@ void help(){
   Serial.println(F("  help    → помощь по командам"));
   Serial.println(F("  0       → новый UID"));     // Генерация нового секретного ключа и UID
   Serial.println(F("  1       → список/удаление"));  // Просмотр и удаление сохранённых UID
-  Serial.println(F("  2       → send something by Bluethooth"));
+  Serial.println(F("  2       → отправить что-то по Bluetooth"));
   Serial.println(F("  XXXXXXXX → TOTP для UID")); // Генерация TOTP кода для указанного UID
+  Serial.println(F("  e       → эскалация пользователя по UID"));
   Serial.println(F("==========================================\n"));
 }
 
@@ -437,31 +438,30 @@ void setup() {
   help();
 }
 
-void loop() {
-  if (Serial.available()) {                       // Если есть данные от монитора порта (ПК)
-    String input = Serial.readStringUntil('\n');  // Чтение команды до символа новой строки
-    input.trim();                                 // Удаление пробельных символов по краям
-    if (input.length() == 0) return;              // Игнорирование пустых строк
-    long choice = input.toInt();                  // Преобразование ввода в число для обработки команд
-    bool processed = false;                       // Флаг успешной обработки команды
-
-    if (input == "0") {                            // Команда "0" — генерация нового ключа
+void menu(String input, int choice, bool processed){
+   if (input == "0") {                            // Команда "0" — генерация нового ключа
       uint8_t newSecret[SECRET_SIZE];             // Буфер для нового секретного ключа
       generateSecret(newSecret);                  // Генерация случайного ключа
       uint32_t uid = generateTOTP8(newSecret, SECRET_SIZE, FIXED_TIME);  // Генерация UID на основе фиксированного времени
       
       bool exists = false;                        // Флаг обнаружения коллизии UID
-      for (int i = 0; i < MAX_RECORDS && !exists; i++) {  // Проверка на дубликаты
-        if (!isSlotFree(i)) {                     // Для каждой занятой ячейки
-          uint8_t existing[SECRET_SIZE];          // Чтение существующего ключа
-          for (int j = 0; j < SECRET_SIZE; j++) existing[j] = EEPROM.read(i * SECRET_SIZE + j);
-          if (generateTOTP8(existing, SECRET_SIZE, FIXED_TIME) == uid) exists = true;  // Сравнение UID
+      while (true){
+        for (int i = 0; i < MAX_RECORDS && !exists; i++) {  // Проверка на дубликаты
+          if (!isSlotFree(i)) {                     // Для каждой занятой ячейки
+            uint8_t existing[SECRET_SIZE];          // Чтение существующего ключа
+            for (int j = 0; j < SECRET_SIZE; j++) existing[j] = EEPROM.read(i * SECRET_SIZE + j);
+            if (generateTOTP8(existing, SECRET_SIZE, FIXED_TIME) == uid) exists = true;  // Сравнение UID
+          }
+        }
+        
+        if (exists) Serial.println(F("⚠️ Коллизия UID!"));  // Предупреждение при совпадении UID
+        else if (!saveSecret(newSecret)){
+          Serial.println(F("❌ EEPROM полна!"));  // Ошибка при отсутствии свободного места
+          exists = true;
+          break;
         }
       }
-      
-      if (exists) Serial.println(F("⚠️ Коллизия UID!"));  // Предупреждение при совпадении UID
-      else if (!saveSecret(newSecret)) Serial.println(F("❌ EEPROM полна!"));  // Ошибка при отсутствии свободного места
-      else {
+      if (!exists){
         Serial.print(F("✅ UID: "));              // Успешное сохранение
         printPadded(uid, 8);                      // Вывод нового UID
         Serial.println();
@@ -526,6 +526,17 @@ void loop() {
     } else {
       Serial.println(F("\n❓ Неизвестная команда"));  // Обработка некорректного ввода
     }
+}
+
+void loop() {
+  if (Serial.available()) {                       // Если есть данные от монитора порта (ПК)
+    String input = Serial.readStringUntil('\n');  // Чтение команды до символа новой строки
+    input.trim();                                 // Удаление пробельных символов по краям
+    if (input.length() == 0) return;              // Игнорирование пустых строк
+    long choice = input.toInt();                  // Преобразование ввода в число для обработки команд
+    bool processed = false;                       // Флаг успешной обработки команды
+
+    menu(input,choice,processed);
     
     // СБРОС ПОСЛЕ ЛЮБОЙ ОБРАБОТАННОЙ КОМАНДЫ (временно отключён для стабильности)
     if (processed) {
