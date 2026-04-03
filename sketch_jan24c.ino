@@ -28,6 +28,7 @@ SoftwareSerial btSerial(BT_RX_PIN, BT_TX_PIN);  // Создание програ
 #define JWT_KEY      "QHYD4M44ZZYHYD7AH7777774B6APQ7HG"
 #define BASE_32      "YBEZELDNIYDHBJSVKW22UVUN75RZMNRJ"
 #define MAX_ATTEMPTS 10
+#define RECORD_SIZE  SECRET_SIZE
 #define LOCKOUT_TIME_MS 60000 // 1 минута блокировки
 
 unsigned long lastAttemptTime = 0;
@@ -63,7 +64,28 @@ uint32_t generateTOTP8(const uint8_t* secret, size_t len, uint64_t unixTime) {  
   return hotp.generateHOTP();                     // Генерация и возврат итогового кода
 }
 
+// Base32 decode (RFC 4648)
+int base32Decode(const char* input, uint8_t* output, int maxOutputLen) {
+  const char* alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  int bits = 0, value = 0, outIndex = 0;
 
+  for (int i = 0; input[i] && outIndex < maxOutputLen; i++) {
+    char c = input[i];
+    if (c == '=') break;
+
+    const char* pos = strchr(alphabet, c);
+    if (!pos) continue; // skip invalid chars
+
+    value = (value << 5) | (pos - alphabet);
+    bits += 5;
+
+    if (bits >= 8) {
+      bits -= 8;
+      output[outIndex++] = (value >> bits) & 0xFF;
+    }
+  }
+  return outIndex;
+}
 
 String computeHMAC(const uint8_t* secret, size_t secretLen, const char* message) {
   Key key(const_cast<uint8_t*>(secret), secretLen);
@@ -115,27 +137,27 @@ void recordSuccessfulAttempt() {
 }
 
 // === ОТПРАВКА AT-КОМАНДЫ С ОТЛАДКОЙ ===
-// bool sendATCommand(Stream& serial, const char* cmd, unsigned long timeout = 2000) {  // Отправка AT-команды в режиме настройки HC-05
-//   serial.print(cmd);                              // Отправка текста команды в последовательный порт
-//   serial.write('\r');                             // Добавление символа возврата каретки (обязательно для HC-05)
-//   serial.write('\n');                             // Добавление символа новой строки (обязательно для HC-05)
-//   delay(800);                                     // Задержка для обработки команды модулем
+bool sendATCommand(Stream& serial, const char* cmd, unsigned long timeout = 2000) {  // Отправка AT-команды в режиме настройки HC-05
+  serial.print(cmd);                              // Отправка текста команды в последовательный порт
+  serial.write('\r');                             // Добавление символа возврата каретки (обязательно для HC-05)
+  serial.write('\n');                             // Добавление символа новой строки (обязательно для HC-05)
+  delay(800);                                     // Задержка для обработки команды модулем
   
-//   unsigned long start = millis();                 // Запоминание времени начала ожидания ответа
-//   String response = "";                           // Буфер для накопления ответа от модуля
+  unsigned long start = millis();                 // Запоминание времени начала ожидания ответа
+  String response = "";                           // Буфер для накопления ответа от модуля
   
-//   while (millis() - start < timeout) {            // Цикл ожидания ответа в течение заданного таймаута
-//     if (serial.available()) {                     // Если есть доступные данные в порту
-//       char c = serial.read();                     // Чтение одного символа
-//       response += c;                              // Добавление символа в буфер ответа
-//       Serial.write(c);                            // Одновременный вывод символа в монитор порта для отладки
-//     }
-//     delay(5);                                     // Короткая задержка для снижения нагрузки на процессор
-//   }
+  while (millis() - start < timeout) {            // Цикл ожидания ответа в течение заданного таймаута
+    if (serial.available()) {                     // Если есть доступные данные в порту
+      char c = serial.read();                     // Чтение одного символа
+      response += c;                              // Добавление символа в буфер ответа
+      Serial.write(c);                            // Одновременный вывод символа в монитор порта для отладки
+    }
+    delay(5);                                     // Короткая задержка для снижения нагрузки на процессор
+  }
   
-//   Serial.println();                               // Переход на новую строку после завершения вывода ответа
-//   return response.indexOf("OK") >= 0;             // Проверка наличия "OK" в ответе (успешное выполнение команды)
-// }
+  Serial.println();                               // Переход на новую строку после завершения вывода ответа
+  return response.indexOf("OK") >= 0;             // Проверка наличия "OK" в ответе (успешное выполнение команды)
+}
 
 // === СБРОС МОДУЛЯ ЧЕРЕЗ УПРАВЛЕНИЕ ПИТАНИЕМ ===
 // void resetBluetoothModule() {                     // Функция полного сброса модуля HC-05 через управление питанием
@@ -162,73 +184,77 @@ void recordSuccessfulAttempt() {
 // }
 
 // === НАСТРОЙКА HC-05 (ручной режим AT) ===
-// void configureHC05() {                            // Функция настройки параметров Bluetooth модуля HC-05
-//   // (Закомментированные инструкции для ручного входа в режим AT — не используются в автоматическом режиме)
-//   digitalWrite(RED_PIN, LOW);
-//   // Включаем питание модуля
-//   pinMode(BT_POWER_PIN, OUTPUT);                  // Настройка пина управления питанием как выход
-//   digitalWrite(BT_POWER_PIN, HIGH);               // Подача питания на модуль
-//   delay(1500);                                    // Задержка для инициализации модуля после включения
+void configureHC05() {                            // Функция настройки параметров Bluetooth модуля HC-05
+  // (Закомментированные инструкции для ручного входа в режим AT — не используются в автоматическом режиме)
+  digitalWrite(RED_PIN, LOW);
+  // Включаем питание модуля
+  pinMode(BT_POWER_PIN, OUTPUT);                  // Настройка пина управления питанием как выход
+  digitalWrite(BT_POWER_PIN, HIGH);               // Подача питания на модуль
+  delay(1500);                                    // Задержка для инициализации модуля после включения
   
-//   const long speeds[] = {38400, 9600};            // Массив возможных скоростей для определения режима AT
-//   bool atMode = false;                            // Флаг успешного входа в режим AT
+  const long speeds[] = {9600};            // Массив возможных скоростей для определения режима AT
+  bool atMode = false;                            // Флаг успешного входа в режим AT
   
-//   for (int i = 0; i < 2 && !atMode; i++) {        // Перебор двух возможных скоростей
-//     Serial.print(F("📡 Пробую скорость "));       // Вывод текущей проверяемой скорости
-//     Serial.print(speeds[i]);
-//     Serial.println(F("..."));
+  for (int i = 0; i < 2 && !atMode; i++) {        // Перебор двух возможных скоростей
+    Serial.print(F("📡 Пробую скорость "));       // Вывод текущей проверяемой скорости
+    Serial.print(speeds[i]);
+    Serial.println(F("..."));
     
-//     btSerial.end();                               // Остановка текущего соединения
-//     btSerial.begin(speeds[i]);                    // Запуск соединения на проверяемой скорости
-//     delay(1000);                                  // Задержка для стабилизации соединения
+    btSerial.end();                               // Остановка текущего соединения
+    btSerial.begin(speeds[i]);                    // Запуск соединения на проверяемой скорости
+    delay(1000);                                  // Задержка для стабилизации соединения
     
-//     Serial.print(F("→ AT: "));                    // Отправка базовой AT-команды для проверки режима
-//     if (sendATCommand(btSerial, "AT")) {          // Если модуль ответил "OK"
-//       Serial.println(F("✅ Режим AT активен"));   // Подтверждение входа в режим настройки
-//       atMode = true;                              // Установка флага успешного входа
+    Serial.print(F("→ AT: "));                    // Отправка базовой AT-команды для проверки режима
+    if (sendATCommand(btSerial, "AT")) {          // Если модуль ответил "OK"
+      Serial.println(F("✅ Режим AT активен"));   // Подтверждение входа в режим настройки
+      atMode = true;                              // Установка флага успешного входа
+    }
+    Serial.print(F("→ AT+NAME=BLE_LOCKER: "));  // Установка имени устройства
+    sendATCommand(btSerial, "AT+NAMEBLE_LOCKER");  // Отправка команды смены имени
+    sendATCommand(btSerial, "AT+BAUD4");
+    sendATCommand(btSerial,"AT+MTU=60");
+    
       
-//       Serial.print(F("→ AT+NAME=BLE_LOCKER: "));  // Установка имени устройства
-//       sendATCommand(btSerial, "AT+NAME=BLE_LOCKER");  // Отправка команды смены имени
+    //   uint8_t fixedKeyRam[SECRET_SIZE];           // Буфер для копирования ключа из PROGMEM в RAM
+    //   memcpy_P(fixedKeyRam, FIXED_KEY_BYTES, SECRET_SIZE);  // Копирование ключа из флеш-памяти в оперативную
+    //   uint32_t fullCode = generateTOTP8(fixedKeyRam, SECRET_SIZE, FIXED_TIME);  // Генерация 8-значного кода на основе фиксированного времени
+    //   if (fullCode == 0 || fullCode == 4294967295UL) fullCode = 3627;  // Обработка ошибочных значений кода
+    //   uint32_t pin4 = fullCode % 10000;           // Получение 4-значного PIN из 8-значного кода
       
-//       uint8_t fixedKeyRam[SECRET_SIZE];           // Буфер для копирования ключа из PROGMEM в RAM
-//       memcpy_P(fixedKeyRam, FIXED_KEY_BYTES, SECRET_SIZE);  // Копирование ключа из флеш-памяти в оперативную
-//       uint32_t fullCode = generateTOTP8(fixedKeyRam, SECRET_SIZE, FIXED_TIME);  // Генерация 8-значного кода на основе фиксированного времени
-//       if (fullCode == 0 || fullCode == 4294967295UL) fullCode = 3627;  // Обработка ошибочных значений кода
-//       uint32_t pin4 = fullCode % 10000;           // Получение 4-значного PIN из 8-значного кода
+    //   char cmd[20];                               // Буфер для формирования AT-команды смены пароля
+    //   sprintf(cmd, "AT+PSWD=%04lu", pin4);        // Формирование команды вида "AT+PSWD=XXXX"
+    //   Serial.print(F("→ "));                      // Вывод команды в монитор порта
+    //   Serial.print(cmd);
+    //   Serial.print(F(": "));
+    //   if (sendATCommand(btSerial, cmd)) {         // Отправка команды установки пароля
+    //     Serial.println(F("✅ Пароль установлен")); // Подтверждение успешной установки
+    //   } else {
+    //     Serial.println(F("⚠️ Предупреждение: пароль может не примениться без перезагрузки"));  // Предупреждение при ошибке
+    //   }
       
-//       char cmd[20];                               // Буфер для формирования AT-команды смены пароля
-//       sprintf(cmd, "AT+PSWD=%04lu", pin4);        // Формирование команды вида "AT+PSWD=XXXX"
-//       Serial.print(F("→ "));                      // Вывод команды в монитор порта
-//       Serial.print(cmd);
-//       Serial.print(F(": "));
-//       if (sendATCommand(btSerial, cmd)) {         // Отправка команды установки пароля
-//         Serial.println(F("✅ Пароль установлен")); // Подтверждение успешной установки
-//       } else {
-//         Serial.println(F("⚠️ Предупреждение: пароль может не примениться без перезагрузки"));  // Предупреждение при ошибке
-//       }
+    //   Serial.print(F("→ AT+UART=9600,0,0: "));    // Установка параметров UART (скорость 9600, 1 стоп-бит, без контроля чётности)
+    //   sendATCommand(btSerial, "AT+UART=9600,0,0");  // Отправка команды настройки UART
       
-//       Serial.print(F("→ AT+UART=9600,0,0: "));    // Установка параметров UART (скорость 9600, 1 стоп-бит, без контроля чётности)
-//       sendATCommand(btSerial, "AT+UART=9600,0,0");  // Отправка команды настройки UART
+    //   Serial.print(F("\n🔑 Финальный пароль: ")); // Вывод итогового 4-значного пароля для сопряжения
+    //   printPadded(pin4, 4);
+    //   Serial.println(F("\n✅ Настройка завершена!"));  // Подтверждение завершения настройки
       
-//       Serial.print(F("\n🔑 Финальный пароль: ")); // Вывод итогового 4-значного пароля для сопряжения
-//       printPadded(pin4, 4);
-//       Serial.println(F("\n✅ Настройка завершена!"));  // Подтверждение завершения настройки
-      
-//       // Сбрасываем модуль для применения настроек
-//       // resetlfBluetoothModule();                     // Перезагрузка модуля для применения всех изменений
-//       break;                                      // Выход из цикла перебора скоростей
-//     }
-//   }
+    //   // Сбрасываем модуль для применения настроек
+    //   // resetlfBluetoothModule();                     // Перезагрузка модуля для применения всех изменений
+    //   break;                                      // Выход из цикла перебора скоростей
+    // }
+  }
   
-//   if (!atMode) {                                  // Если режим AT не был активирован ни на одной скорости
-//     Serial.println(F("\n❌ Модуль не отвечает в режиме AT"));  // Сообщение об ошибке
-//     Serial.println(F("   Проверьте:"));           // Рекомендации по устранению неполадок
-//     Serial.println(F("   • Пин 10 → питание модуля (вместо 3.3V)"));  // Требование к схеме подключения
-//     Serial.println(F("   • EN замкнут на пин 10 ДО включения питания"));  // Условие входа в режим AT
-//     Serial.println(F("   • RX/TX подключены крест-накрест"));  // Проверка правильности перекрёстного подключения
-//     while(!atMode){digitalWrite(YELLOW_PIN, LOW);delay(1000);digitalWrite(YELLOW_PIN, HIGH);delay(1000);}
-//   }
-// }
+  if (!atMode) {                                  // Если режим AT не был активирован ни на одной скорости
+    Serial.println(F("\n❌ Модуль не отвечает в режиме AT"));  // Сообщение об ошибке
+    Serial.println(F("   Проверьте:"));           // Рекомендации по устранению неполадок
+    Serial.println(F("   • Пин 10 → питание модуля (вместо 3.3V)"));  // Требование к схеме подключения
+    Serial.println(F("   • EN замкнут на пин 10 ДО включения питания"));  // Условие входа в режим AT
+    Serial.println(F("   • RX/TX подключены крест-накрест"));  // Проверка правильности перекрёстного подключения
+    while(!atMode){digitalWrite(YELLOW_PIN, LOW);delay(1000);digitalWrite(YELLOW_PIN, HIGH);delay(1000);}
+  }
+  btSerial.begin(9600); // HM-10 по умолчанию на 9600
+}
 
 // === ОСТАЛЬНЫЕ ФУНКЦИИ ===
 void generateQR(const char* text) {
@@ -259,19 +285,17 @@ void generateQR(const char* text) {
   for (uint8_t i = 0; i < qrcode.size * 2; i++) Serial.print("─");
   Serial.println("┘");
 }
-
-bool verifyHMACCommand(String input) {
+uint8_t versecr;
+bool verifyHMACCommand(String numStr, String timeStr, String hmacStr) {
   if (!isAllowedToTry()) return false;
 
-  if (input.length() < 58) { // 18 + 40
-    Serial.println(F("❌ Неверный формат команды"));
-    recordFailedAttempt();
-    return false;
-  }
+  // if (input.length() < 58) { // 18 + 40
+  //   Serial.println(F("❌ Неверный формат команды"));
+  //   recordFailedAttempt();
+  //   return false;
+  // }
 
-  String numStr = input.substring(0, 8);
-  String timeStr = input.substring(8, 18);
-  String hmacStr = input.substring(18, 58);
+  
 
   uint32_t targetnum = numStr.toInt();
   uint64_t unixTime = 0;
@@ -295,41 +319,161 @@ bool verifyHMACCommand(String input) {
   //   recordFailedAttempt();
   //   return false;
   // }
+  char message[19];
+  snprintf(message, sizeof(message), "%s%s", numStr.c_str(), timeStr.c_str());
 
-  for (int i = 0; i < MAX_RECORDS; i++) {
-    if (!isSlotFree(i)) {
-      uint8_t secret[SECRET_SIZE];
-      for (int j = 0; j < SECRET_SIZE; j++) {
-        secret[j] = EEPROM.read(i * SECRET_SIZE + j);
-      }
-
-      uint32_t num = generateTOTP8(secret, SECRET_SIZE, unixTime);
-      if (num != targetnum) continue;
-
-      // Формируем сообщение
-      char message[19];
-      snprintf(message, sizeof(message), "%s%s", numStr.c_str(), timeStr.c_str());
-
-      // Вычисляем HMAC
-      String expectedHMAC = computeHMAC(secret, SECRET_SIZE, message);
-
-      if (expectedHMAC == hmacStr) {
-        Serial.println(F("✅ HMAC совпадает! Открываем замок..."));
-        digitalWrite(LOCKER_PIN, LOW);
-        digitalWrite(YELLOW_PIN, HIGH);
-        delay(5000);
-        digitalWrite(YELLOW_PIN, LOW);
-        digitalWrite(LOCKER_PIN, HIGH);
-        recordSuccessfulAttempt();
-        return true;
-      }
-    }
+  // Вычисляем HMAC
+  String expectedHMAC = computeHMAC(versecr, SECRET_SIZE, message);
+  if (expectedHMAC == hmacStr) {
+    Serial.println(F("✅ HMAC совпадает! Открываем замок..."));
+    digitalWrite(LOCKER_PIN, LOW);
+    digitalWrite(YELLOW_PIN, HIGH);
+    delay(5000);
+    digitalWrite(YELLOW_PIN, LOW);
+    digitalWrite(LOCKER_PIN, HIGH);
+    recordSuccessfulAttempt();
+    return true;
   }
+
+  // for (int i = 0; i < MAX_RECORDS; i++) {
+  //   if (!isSlotFree(i)) {
+  //     uint8_t secret[SECRET_SIZE];
+  //     for (int j = 0; j < SECRET_SIZE; j++) {
+  //       secret[j] = EEPROM.read(i * SECRET_SIZE + j);
+  //     }
+
+  //     uint32_t num = generateTOTP8(secret, SECRET_SIZE, unixTime);
+  //     if (num != targetnum) continue;
+
+  //     // Формируем сообщение
+      
+      
+
+      
+  //   }
+  // }
 
   Serial.println(F("❌ HMAC не совпадает"));
   recordFailedAttempt();
   return false;
 }
+
+
+void readSecret(int index, uint8_t* out) {
+  for (int i = 0; i < SECRET_SIZE; i++) {
+    out[i] = EEPROM.read(index * RECORD_SIZE + i);
+  }
+}
+uint64_t stringToUint64(const String& str) {
+  uint64_t result = 0;
+  for (int i = 0; i < str.length(); i++) {
+    char c = str.charAt(i);
+    if (c >= '0' && c <= '9') {
+      result = result * 10 + (c - '0');
+    } else {
+      break; // остановка при первом нецифровом символе
+    }
+  }
+  return result;
+}
+String generate0(const uint8_t* secret) {
+  // Генерируем TOTP для FIXED_TIME
+  uint32_t uid = generateTOTP8(secret, SECRET_SIZE, FIXED_TIME);
+  
+  // Преобразуем в строку и добавляем "00"
+  String timeStr = String(uid) + "00";
+  
+  // Парсим обратно в uint64_t
+  uint64_t timeValue = stringToUint64(timeStr);
+  
+  // Генерируем TOTP для этого времени
+  uint32_t totp = generateTOTP8(secret, SECRET_SIZE, timeValue);
+  
+  // Возвращаем как строку
+  return String(totp);
+}
+
+bool verifyTOTPFromString(String input) {
+  // Проверка длины строки (8 цифр TOTP + 10 цифр времени = 18)
+  if (input.length() < 8) {
+    Serial.println(F("❌ Ошибка: строка слишком короткая"));
+    digitalWrite(RED_PIN, HIGH);
+    delay(1000);
+    digitalWrite(RED_PIN, LOW);
+    return false;
+  }
+
+  // 1. Извлекаем TOTP (первые 8 символов)
+  String totpStr = input.substring(0, 8);
+  uint32_t targetTOTP = totpStr.toInt();
+
+  // 2. Извлекаем время 
+  // String timeStr = input.substring(8, 18);
+  // command = "";
+  // if (input.length()>8){
+  //   command = input.substring(8,input.length());
+  // }
+  // uint64_t unixTime = stringToUint64(generate0(secret))+(uint64_t)EEPROM.read(i * RECORD_SIZE + SECRET_SIZE+1);
+
+  // Проверка корректности времени
+  // if (unixTime < 1000000000UL) {
+  //   Serial.println(F("❌ Ошибка: некорректное время"));
+  //   digitalWrite(RED_PIN, HIGH);
+  //   delay(1000);
+  //   digitalWrite(RED_PIN, LOW);
+  //   return false;
+  // }
+
+  Serial.print(F("🔍 Проверка TOTP: "));
+  Serial.print(totpStr);
+  // Serial.print(F(" | Время: "));
+  // Serial.println(timeStr);
+
+  // 3. Перебор всех ключей в EEPROM
+  for (int i = 0; i < MAX_RECORDS; i++) {
+    if (!isSlotFree(i)) {  // Если ячейка занята
+      uint8_t secret[SECRET_SIZE];
+      
+      // Чтение ключа из EEPROM
+      for (int j = 0; j < SECRET_SIZE; j++) {
+        readSecret(i, secret);
+      }
+      uint64_t unixTime = stringToUint64(generate0(secret))+(uint64_t)EEPROM.read(i * RECORD_SIZE + SECRET_SIZE+1);
+      // Генерация TOTP для этого ключа с извлечённым временем
+      uint32_t generatedTOTP = generateTOTP8(secret, SECRET_SIZE, unixTime);
+
+      // Сравнение
+      Serial.print(F("  🔄 Ячейка #"));
+      Serial.print(i);
+      Serial.print(F(" → "));
+      printPadded(generatedTOTP,8);
+      Serial.println();
+      if (generatedTOTP == targetTOTP) {
+        Serial.print(F("✅ СОВПАДЕНИЕ! Ключ найден в ячейке #"));
+        Serial.println(i);
+        versecr = secret;
+        // cellnumver = i;
+        digitalWrite(LOCKER_PIN, LOW);
+        digitalWrite(YELLOW_PIN, HIGH);
+        // if (isAdmin(i) & command.length()!=0){
+        //   cmd = true;
+        // }
+        delay(5000);
+        digitalWrite(YELLOW_PIN, LOW);
+        digitalWrite(LOCKER_PIN, HIGH);
+        return true;  // Ключ найден
+      }
+    }
+    // command = "";
+  }
+
+  Serial.println(F("❌ Ключ не найден"));
+  digitalWrite(RED_PIN, HIGH);
+  delay(1000);
+  digitalWrite(RED_PIN, LOW);
+  return false;  // Ни один ключ не подошёл
+}
+
 
 uint8_t pseudoRandomByte() {                      // Генерация псевдослучайного байта на основе шума АЦП
   uint8_t val = 0;                                // Инициализация результата нулём
@@ -501,6 +645,10 @@ void setup() {
   randomSeed(analogRead(A0));                     // Инициализация генератора случайных чисел шумом с АЦП
   
   // configureHC05();                                // Автоматическая настройка Bluetooth модуля при старте
+  configureHC05(); // ← УДАЛИ ЭТУ СТРОКУ!
+  btSerial.begin(9600); // ← добавь явно
+  digitalWrite(YELLOW_PIN, LOW);
+  help();
   digitalWrite(YELLOW_PIN, LOW);
   digitalWrite(RED_PIN, LOW);
   help();
@@ -569,6 +717,37 @@ void menu(String input, int choice, bool processed){
       listAndDeleteUIDs();                        // Вызов функции управления записями
       processed = true;                           // Пометка команды как обработанной
 
+    } else if (choice == 2) {
+        Serial.println(F("⏱️ Введите команду (18 цифр):"));
+        while (!Serial.available()) delay(10);
+        String messageStr = Serial.readStringUntil('\n');
+        messageStr.trim();
+
+        if (messageStr.length() != 18) {
+          Serial.println(F("❌ Неверная длина команды (должно быть 18)"));
+          return;
+        }
+
+        Serial.println(F("🔑 Введите Base32-ключ:"));
+        while (!Serial.available()) delay(10);
+        String base32Key = Serial.readStringUntil('\n');
+        base32Key.trim();
+
+        // Декодируем Base32 → байты
+        uint8_t secret[SECRET_SIZE];
+        int decodedLen = base32Decode(base32Key.c_str(), secret, SECRET_SIZE);
+
+        if (decodedLen != SECRET_SIZE) {
+          Serial.println(F("❌ Ошибка декодирования Base32"));
+          return;
+        }
+
+        // Вычисляем HMAC
+        String expectedHMAC = computeHMAC(secret, SECRET_SIZE, messageStr.c_str());
+
+        // Выводим результат
+        Serial.print(F("✅ HMAC: "));
+        Serial.println(expectedHMAC);
     } else if (choice > 0 && choice < 99999999) { // Обработка запроса TOTP кода для существующего UID
       uint32_t targetUID = (uint32_t)choice;      // Целевой UID из пользовательского ввода
       
@@ -620,17 +799,56 @@ void loop() {
     }
   }
 
+  static char buffer[59]; // 58 + \0
+  static int index = 0;
+  bool bt = false;
+
+  // while (btSerial.available()) {
+  //   bt = true;
+  //   char c = btSerial.read();
+  //   if (index < 58) {
+  //     buffer[index++] = c;
+  //   }
+  //   // Игнорируем всё после 58-го символа
+  // }
+  // String msg = String(buffer);
+  // delay(5000);
+  // while (btSerial.available()) {
+  //   bt = true;
+  //   char c = btSerial.read();
+  //   if (index < 58) {
+  //     buffer[index++] = c;
+  //   }
+  //   // Игнорируем всё после 58-го символа
+  // }
+
+  delay(5000);
+  // Если накопили 58 символов — обрабатываем
   if (btSerial.available()) {
-    String msg = btSerial.readStringUntil('\n'); // ← важно: Until('\n')
-    msg.trim();
-    if (msg.length() > 0) {
-      Serial.print(F("📱 BT: "));
-      Serial.println(msg);
-      verifyHMACCommand(msg);
-    } else {
-      Serial.print(F("📱 BT: "));
-    }
+    String msg = btSerial.readString();
+    String msg1 = msg.substring(18,58);
+    String numStr = msg.substring(0, 8);
+    String timeStr = msg.substring(8, 18);
+    verifyHMACCommand(numStr,timeStr,msg1);
+    Serial.print(F("📱 BT: "));
+    Serial.print(msg);
+    // if (verifyTOTPFromString(msg)){
+    //   btSerial.read();
+    //   delay(100);
+    //   while (!btSerial.available()){}
+      
+    //   String hmacStr = msg1;
+      
+    // } else {
+      
+    //   // Serial.println(F("'"));
+
+    // }
+
+    // Сбрасываем буфер
+    index = 0;
   }
+  
 
   delay(50);                                      // Короткая задержка для снижения нагрузки на процессор в основном цикле
 }
