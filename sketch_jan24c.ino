@@ -27,7 +27,7 @@ SoftwareSerial btSerial(BT_RX_PIN, BT_TX_PIN);  // Создание програ
 #define FIXED_TIME   1769272850ULL  // Фиксированное временное значение для генерации тестовых UID (Unix timestamp)
 #define JWT_KEY      "QHYD4M44ZZYHYD7AH7777774B6APQ7HG"
 #define BASE_32      "YBEZELDNIYDHBJSVKW22UVUN75RZMNRJ"
-#define MAX_ATTEMPTS 3
+#define MAX_ATTEMPTS 10
 #define LOCKOUT_TIME_MS 60000 // 1 минута блокировки
 
 unsigned long lastAttemptTime = 0;
@@ -340,8 +340,10 @@ uint8_t pseudoRandomByte() {                      // Генерация псев
   return val;                                     // Возврат сгенерированного байта
 }
 
-void generateSecret(uint8_t* out) {               // Генерация случайного секретного ключа заданной длины
-  for (int i = 0; i < SECRET_SIZE; i++) out[i] = pseudoRandomByte();  // Заполнение буфера случайными байтами
+void generateSecret(uint8_t* out) {
+  for (int i = 0; i < SECRET_SIZE; i++) {
+    out[i] = random(256); // Генерация числа от 0 до 255
+  }
 }
 
 const char base32Alphabet[] PROGMEM = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";  // Алфавит кодировки Base32 во флеш-памяти
@@ -500,7 +502,9 @@ void setup() {
   
   // configureHC05();                                // Автоматическая настройка Bluetooth модуля при старте
   digitalWrite(YELLOW_PIN, LOW);
+  digitalWrite(RED_PIN, LOW);
   help();
+  Serial.print(F("📱 BT: "));
 }
 
 void menu(String input, int choice, bool processed){
@@ -510,21 +514,37 @@ void menu(String input, int choice, bool processed){
       uint32_t uid = generateTOTP8(newSecret, SECRET_SIZE, FIXED_TIME);  // Генерация UID на основе фиксированного времени
       
       bool exists = false;                        // Флаг обнаружения коллизии UID
-      while (true){
-        for (int i = 0; i < MAX_RECORDS && !exists; i++) {  // Проверка на дубликаты
-          if (!isSlotFree(i)) {                     // Для каждой занятой ячейки
-            uint8_t existing[SECRET_SIZE];          // Чтение существующего ключа
-            for (int j = 0; j < SECRET_SIZE; j++) existing[j] = EEPROM.read(i * SECRET_SIZE + j);
-            if (generateTOTP8(existing, SECRET_SIZE, FIXED_TIME) == uid) exists = true;  // Сравнение UID
+      int attempts = 0;
+
+      do {
+        attempts++;
+        generateSecret(newSecret);
+        uid = generateTOTP8(newSecret, SECRET_SIZE, FIXED_TIME);
+
+        exists = false;
+        for (int i = 0; i < MAX_RECORDS && !exists; i++) {
+          if (!isSlotFree(i)) {
+            uint8_t existing[SECRET_SIZE];
+            for (int j = 0; j < SECRET_SIZE; j++) {
+              existing[j] = EEPROM.read(i * SECRET_SIZE + j);
+            }
+            if (generateTOTP8(existing, SECRET_SIZE, FIXED_TIME) == uid) {
+              exists = true;
+            }
           }
         }
-        
-        if (exists) Serial.println(F("⚠️ Коллизия UID!"));  // Предупреждение при совпадении UID
-        else if (!saveSecret(newSecret)){
-          Serial.println(F("❌ EEPROM полна!"));  // Ошибка при отсутствии свободного места
-          exists = true;
-          break;
+
+        if (exists) {
+          Serial.println(F("⚠️ Коллизия UID! Повторная генерация..."));
         }
+      } while (exists && attempts < MAX_ATTEMPTS);
+
+      if (exists) {
+        Serial.println(F("❌ Не удалось создать уникальный UID после 10 попыток."));
+      } else if (!saveSecret(newSecret)) {
+        Serial.println(F("❌ EEPROM полна!"));
+      } else {
+        // Успешное сохранение
       }
       if (!exists){
         Serial.print(F("✅ UID: "));              // Успешное сохранение
@@ -607,6 +627,8 @@ void loop() {
       Serial.print(F("📱 BT: "));
       Serial.println(msg);
       verifyHMACCommand(msg);
+    } else {
+      Serial.print(F("📱 BT: "));
     }
   }
 
